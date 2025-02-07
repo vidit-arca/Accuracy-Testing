@@ -5,59 +5,46 @@ from rouge_score import rouge_scorer
 import numpy as np
 import sounddevice as sd
 import speech_recognition as sr
+import scipy.io.wavfile as wav
 
-# Define functions
 def real_time_audio_capture():
-    """
-    Capture audio in real-time using the microphone via sounddevice
-    and transcribe it using speech recognition.
-    """
     recognizer = sr.Recognizer()
+    
+    # Audio recording parameters
+    sample_rate = 44100  # Standard CD-quality audio
+    duration = 30  # Record for 5 seconds
+
+    st.write("Listening... Speak into the microphone.")
+    
+    # Record audio
+    audio_data = sd.rec(int(sample_rate * duration), samplerate=sample_rate, channels=1, dtype='int16')
+    sd.wait()  # Wait until recording is finished
+
+    # Save as WAV file
+    wav.write("temp_audio.wav", sample_rate, audio_data)
+
+    # Recognize speech from the recorded file
+    with sr.AudioFile("temp_audio.wav") as source:
+        audio = recognizer.record(source)
 
     try:
-        st.write("Listening... Speak into the microphone (Press Ctrl+C to stop).")
-        audio_data = []
-
-        # Callback function to collect microphone data
-        def callback(indata, frames, time, status):
-            if status:
-                st.write(f"Status: {status}")
-            audio_data.extend(indata[:, 0])  # Capture mono-channel data
-
-        st.write("Recording... Press Ctrl+C to stop.")
-        with sd.InputStream(callback=callback, samplerate=16000, channels=1):
-            while True:
-                pass
-
-    except KeyboardInterrupt:
-        st.write("Stopped recording.")
-        audio_bytes = (np.array(audio_data) * 32768).astype(np.int16).tobytes()
-        audio = sr.AudioData(audio_bytes, 16000, 2)
-
-        try:
-            transcript = recognizer.recognize_google(audio)
-            st.write("Transcribed Text:")
-            st.write(transcript)
-            return transcript
-        except sr.UnknownValueError:
-            st.write("Sorry, could not understand the audio.")
-            return ""
-        except sr.RequestError as e:
-            st.write(f"Error connecting to Google Speech Recognition service: {e}")
-            return ""
-    except Exception as e:
-        st.write(f"An error occurred during real-time audio capture: {e}")
+        transcript = recognizer.recognize_google(audio)
+        st.write("Transcribed Text:")
+        st.write(transcript)
+        return transcript
+    except sr.UnknownValueError:
+        st.write("Sorry, could not understand the audio.")
+        return ""
+    except sr.RequestError as e:
+        st.write(f"Error connecting to Google Speech Recognition service: {e}")
         return ""
 
 def generate_conversation():
-    """
-    Generate a synthetic medical conversation using a text-generation model.
-    """
     try:
         generator = pipeline("text-generation", model="distilgpt2")
 
         prompt = (
-             "Doctor: What brings you in today?\n"
+            "Doctor: What brings you in today?\n"
             "Patient: I have been experiencing back pain and fatigue.\n"
             "Doctor: How long have you been dealing with these issues?\n"
             "Patient: It's been a few weeks now.\n"
@@ -67,26 +54,10 @@ def generate_conversation():
             "Patient: I have a history of hypertension.\n"
             "Doctor: Have you had any surgeries in the past?\n"
             "Patient: Yes, I had an appendectomy five years ago.\n"
-            "Doctor: Is there any family history of chronic illnesses?\n"
-            "Patient: Yes, my father has diabetes.\n"
-            "Doctor: Do you have any history of addiction?\n"
-            "Patient: No, I don't.\n"
-            "Doctor: How about your diet?\n"
-            "Patient: I try to eat a balanced diet, but I sometimes skip meals due to a busy schedule.\n"
-            "Doctor: How often do you engage in physical activity?\n"
-            "Patient: I try to exercise at least three times a week.\n"
-            "Doctor: How has your stress level been recently?\n"
-            "Patient: It's been quite high due to work pressure.\n"
-            "Doctor: How well are you sleeping?\n"
-            "Patient: I struggle with sleep and often wake up feeling tired.\n"
-            "Doctor: Are you currently on any medication?\n"
-            "Patient: Yes, I'm taking medication for hypertension.\n"
-            "Doctor: "
         )
 
         response = generator(prompt, max_length=300, num_return_sequences=1, temperature=0.7, top_p=0.9)
-        conversation = response[0]['generated_text']
-        return conversation
+        return response[0]['generated_text']
     except Exception as e:
         st.write(f"Error during conversation generation: {e}")
         return "Error generating conversation."
@@ -103,33 +74,40 @@ def calculate_transcription_accuracy(reference_transcript, system_transcript):
 def evaluate_summary(reference_summary, generated_summary):
     try:
         scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True)
-        scores = scorer.score(reference_summary, generated_summary)
-        return scores
+        return scorer.score(reference_summary, generated_summary)
     except Exception as e:
         st.write(f"Error during summary evaluation: {e}")
         return {}
-
+    
 def process_system(with_microphone=False):
+    conversation = ""  # Initialize conversation to avoid UnboundLocalError
+
     if with_microphone:
         st.write("Real-Time Audio Workflow")
         system_transcript = real_time_audio_capture()
         if not system_transcript:
             return {"error": "No audio transcription was captured from the microphone."}
+
+        # Use the same transcript as reference (since there's no predefined reference)
+        reference_transcript = system_transcript  
+
     else:
         st.write("Synthetic Audio Workflow")
         conversation = generate_conversation()
         if conversation.startswith("Error"):
             return {"error": "Conversation generation failed."}
-        system_transcript = conversation
+        
+        system_transcript = conversation  # Assign conversation to system_transcript
+        reference_transcript = conversation  # Use generated text as reference
 
     reference_summary = "Patient exhibits early signs of diabetes."
     generated_summary = "The patient shows symptoms of fatigue, back pain, and difficulty sleeping."
 
-    transcription_accuracy = calculate_transcription_accuracy(conversation, system_transcript)
+    transcription_accuracy = calculate_transcription_accuracy(reference_transcript, system_transcript)
     summary_scores = evaluate_summary(reference_summary, generated_summary)
 
     return {
-        "reference_transcript": conversation,
+        "reference_transcript": reference_transcript,  # Now properly assigned
         "system_transcript": system_transcript,
         "reference_summary": reference_summary,
         "generated_summary": generated_summary,
@@ -149,19 +127,15 @@ def main():
             st.error(results["error"])
         else:
             st.subheader("Transcripts")
-            st.write("**Reference Transcript:**")
-            st.write(results["reference_transcript"])
-            st.write("**System Transcript:**")
-            st.write(results["system_transcript"])
+            st.write("**Reference Transcript:**", results["reference_transcript"])
+            st.write("**System Transcript:**", results["system_transcript"])
 
             st.subheader("Transcription Accuracy")
             st.write(f"Accuracy: {results['transcription_accuracy']:.2f}%")
 
             st.subheader("Summaries")
-            st.write("**Reference Summary:**")
-            st.write(results["reference_summary"])
-            st.write("**Generated Summary:**")
-            st.write(results["generated_summary"])
+            st.write("**Reference Summary:**", results["reference_summary"])
+            st.write("**Generated Summary:**", results["generated_summary"])
 
             st.subheader("ROUGE Scores")
             for key, score in results["summary_scores"].items():
